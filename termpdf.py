@@ -1112,6 +1112,9 @@ def write_chunked(cmd, data):
 
 def bib_from_field(field,regex):
 
+    if not config.BIBTEX:
+        return None
+
     if shutil.which('bibtool') is not None:
         from pybtex.database import parse_string 
         select = "select {" + field + " "
@@ -1132,7 +1135,7 @@ def bib_from_field(field,regex):
 def bib_from_key(citekeys):
     
     field = '$key'
-    regex = '\|'.join(citekeys)
+    regex = r'\|'.join(citekeys)
     regex = '^' + regex + '$'
     return bib_from_field(field,regex)
 
