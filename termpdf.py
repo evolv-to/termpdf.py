@@ -712,8 +712,8 @@ class Document(fitz.Document):
                 # pix.tint_with(red, blue, green)
                 # tinting disabled due to unresolved bug
 
-            # build cmd to send to kitty
-            cmd = {'i': p + 1, 't': 'd', 's': pix.width, 'v': pix.height}
+            # build cmd to send to kitty (q=2 suppresses responses during transfer)
+            cmd = {'i': p + 1, 't': 'd', 's': pix.width, 'v': pix.height, 'q': 2}
 
             if self.alpha:
                 cmd['f'] = 32
