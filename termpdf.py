@@ -42,8 +42,10 @@ Keys:
     i:              invert colors
     d:              darken using TINT_COLOR
     [count]P:       Set logical page number of current page to count
-    -:              zoom out (reflowable only)
-    +:              zoom in (reflowable only)
+    -:              zoom out
+    +:              zoom in
+    z:              reset zoom to fit page
+    H/J/K/L:        pan left/down/up/right (when zoomed)
     ctrl-r:         refresh
     q:              quit
 """
@@ -285,6 +287,9 @@ class Document(fitz.Document):
         self.invert = False
         self.tint = False
         self.tint_color = config.TINT_COLOR
+        self.zoom_level = 1.0
+        self.pan_x = 0.0
+        self.pan_y = 0.0
         self.nvim = None
         self.nvim_listen_address = '/tmp/termpdf_nvim_bridge'
         self.page_states = [ Page_State(i) for i in range(0,self.pages + 1) ]
@@ -308,7 +313,7 @@ class Document(fitz.Document):
             json.dump(state, f)
 
     def goto_page(self, p):
-        # store prevpage 
+        # store prevpage
         self.prevpage = self.page
         # delete prevpage
         # self.clear_page(self.prevpage)
@@ -320,6 +325,9 @@ class Document(fitz.Document):
         else:
             self.page = p
         self.logicalpage = self.page_to_logical(self.page)
+        # reset pan on page change (zoom level persists)
+        self.pan_x = 0.0
+        self.pan_y = 0.0
     
     def goto_logical_page(self, p):
         p = self.logical_to_page(p)
@@ -622,19 +630,28 @@ class Document(fitz.Document):
             pw = page.bound().height
             ph = page.bound().width
         
-        # calculate zoom factor
+        # calculate base zoom factor (fit to screen)
         fx = dw / pw
         fy = dh / ph
-        factor = min(fx,fy)
+        base_factor = min(fx,fy)
+
+        # apply user zoom level
+        factor = base_factor * self.zoom_level
         self.page_states[p].factor = factor
-    
+
         # calculate zoomed dimensions
         zw = factor * pw
         zh = factor * ph
 
+        # clamp pan to keep page content visible
+        max_pan_x = max(0, (zw - dw) / 2)
+        max_pan_y = max(0, (zh - dh) / 2)
+        self.pan_x = max(-max_pan_x, min(max_pan_x, self.pan_x))
+        self.pan_y = max(-max_pan_y, min(max_pan_y, self.pan_y))
+
         # calculate place in pixels, convert to cells
-        pix_x = (dw / 2) - (zw / 2)
-        pix_y = (dh / 2) - (zh / 2)
+        pix_x = (dw / 2) - (zw / 2) - self.pan_x
+        pix_y = (dh / 2) - (zh / 2) - self.pan_y
         l_col = int(pix_x / scr.cell_width) + 1
         t_row = int(pix_y / scr.cell_height)
         r_col = l_col + int(zw / scr.cell_width)
@@ -643,7 +660,7 @@ class Document(fitz.Document):
         self.page_states[p].place = place
 
         # move cursor to place
-        scr.set_cursor(l_col,t_row)
+        scr.set_cursor(max(1, l_col), max(0, t_row))
 
         # clear previous page
         # display image
@@ -1059,6 +1076,11 @@ class shortcuts:
         self.SET_PAGE_ALT     = [ord('I')]
         self.INC_FONT         = [ord('=')]
         self.DEC_FONT         = [ord('-')]
+        self.ZOOM_RESET       = [ord('z')]
+        self.PAN_LEFT         = [ord('H')]
+        self.PAN_DOWN         = [ord('J')]
+        self.PAN_UP           = [ord('K')]
+        self.PAN_RIGHT        = [ord('L')]
         self.OPEN_GUI         = [ord('X')]
         self.REFRESH          = [18, curses.KEY_RESIZE]            # CTRL-R
         self.QUIT             = [3, ord('q')]
@@ -1722,13 +1744,53 @@ def view(file_change,doc):
             stack = [0]
        
         elif key in keys.INC_FONT:
-            doc.set_layout(doc.papersize - count)
+            if doc.is_pdf:
+                doc.zoom_level = min(doc.zoom_level + 0.1, 10.0)
+                doc.mark_all_pages_stale()
+            else:
+                doc.set_layout(doc.papersize - count)
+                doc.mark_all_pages_stale()
+            count_string = ""
+            stack = [0]
+
+        elif key in keys.DEC_FONT:
+            if doc.is_pdf:
+                doc.zoom_level = max(doc.zoom_level - 0.1, 0.25)
+                doc.mark_all_pages_stale()
+            else:
+                doc.set_layout(doc.papersize + count)
+                doc.mark_all_pages_stale()
+            count_string = ""
+            stack = [0]
+
+        elif key in keys.ZOOM_RESET:
+            doc.zoom_level = 1.0
+            doc.pan_x = 0.0
+            doc.pan_y = 0.0
             doc.mark_all_pages_stale()
             count_string = ""
             stack = [0]
-        
-        elif key in keys.DEC_FONT:
-            doc.set_layout(doc.papersize + count)
+
+        elif key in keys.PAN_LEFT:
+            doc.pan_x -= scr.width * 0.2
+            doc.mark_all_pages_stale()
+            count_string = ""
+            stack = [0]
+
+        elif key in keys.PAN_RIGHT:
+            doc.pan_x += scr.width * 0.2
+            doc.mark_all_pages_stale()
+            count_string = ""
+            stack = [0]
+
+        elif key in keys.PAN_UP:
+            doc.pan_y -= scr.height * 0.2
+            doc.mark_all_pages_stale()
+            count_string = ""
+            stack = [0]
+
+        elif key in keys.PAN_DOWN:
+            doc.pan_y += scr.height * 0.2
             doc.mark_all_pages_stale()
             count_string = ""
             stack = [0]
