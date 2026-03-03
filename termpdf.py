@@ -45,7 +45,7 @@ Keys:
     -:              zoom out
     +:              zoom in
     z:              reset zoom to fit page
-    H/J/K/L:        pan left/down/up/right (when zoomed)
+    Shift+arrows:   pan when zoomed
     ctrl-r:         refresh
     q:              quit
 """
@@ -639,28 +639,55 @@ class Document(fitz.Document):
         factor = base_factor * self.zoom_level
         self.page_states[p].factor = factor
 
-        # calculate zoomed dimensions
+        # full zoomed page dimensions in pixels
         zw = factor * pw
         zh = factor * ph
 
-        # clamp pan to keep page content visible
-        max_pan_x = max(0, (zw - dw) / 2)
-        max_pan_y = max(0, (zh - dh) / 2)
-        self.pan_x = max(-max_pan_x, min(max_pan_x, self.pan_x))
-        self.pan_y = max(-max_pan_y, min(max_pan_y, self.pan_y))
+        # viewport is the terminal area
+        vw = dw
+        vh = dh
 
-        # calculate place in pixels, convert to cells
-        pix_x = (dw / 2) - (zw / 2) - self.pan_x
-        pix_y = (dh / 2) - (zh / 2) - self.pan_y
-        l_col = int(pix_x / scr.cell_width) + 1
-        t_row = int(pix_y / scr.cell_height)
-        r_col = l_col + int(zw / scr.cell_width)
-        b_row = t_row + int(zh / scr.cell_height)
+        if self.zoom_level > 1.0 and (zw > vw or zh > vh):
+            # Zoomed in: render only the visible viewport via clip rect
+            # pan_x/pan_y offset from center (pixels in zoomed space)
+            max_pan_x = max(0, (zw - vw) / 2)
+            max_pan_y = max(0, (zh - vh) / 2)
+            self.pan_x = max(-max_pan_x, min(max_pan_x, self.pan_x))
+            self.pan_y = max(-max_pan_y, min(max_pan_y, self.pan_y))
+
+            # viewport top-left in zoomed image coordinates
+            src_x = (zw - vw) / 2 + self.pan_x
+            src_y = (zh - vh) / 2 + self.pan_y
+
+            # convert viewport back to page coordinates for clip
+            clip_rect = fitz.Rect(
+                src_x / factor, src_y / factor,
+                (src_x + vw) / factor, (src_y + vh) / factor
+            )
+
+            # place at top-left of terminal
+            l_col = 1
+            t_row = 0
+            r_col = l_col + int(vw / scr.cell_width)
+            b_row = t_row + int(vh / scr.cell_height)
+        else:
+            # Fit to screen or smaller: center the page
+            self.pan_x = 0.0
+            self.pan_y = 0.0
+            clip_rect = None
+
+            pix_x = (dw / 2) - (zw / 2)
+            pix_y = (dh / 2) - (zh / 2)
+            l_col = int(pix_x / scr.cell_width) + 1
+            t_row = int(pix_y / scr.cell_height)
+            r_col = l_col + int(zw / scr.cell_width)
+            b_row = t_row + int(zh / scr.cell_height)
+
         place = (l_col, t_row, r_col, b_row)
         self.page_states[p].place = place
 
         # move cursor to place
-        scr.set_cursor(max(1, l_col), max(0, t_row))
+        scr.set_cursor(l_col, t_row)
 
         # clear previous page
         # display image
@@ -669,7 +696,10 @@ class Document(fitz.Document):
             # get zoomed and rotated pixmap
             mat = fitz.Matrix(factor, factor)
             mat = mat.prerotate(self.rotation)
-            pix = page.get_pixmap(matrix = mat, alpha=self.alpha)
+            if clip_rect is not None:
+                pix = page.get_pixmap(matrix=mat, clip=clip_rect, alpha=self.alpha)
+            else:
+                pix = page.get_pixmap(matrix=mat, alpha=self.alpha)
 
             if self.invert:
                 pix.invert_irect()
@@ -1077,10 +1107,6 @@ class shortcuts:
         self.INC_FONT         = [ord('=')]
         self.DEC_FONT         = [ord('-')]
         self.ZOOM_RESET       = [ord('z')]
-        self.PAN_LEFT         = [ord('H')]
-        self.PAN_DOWN         = [ord('J')]
-        self.PAN_UP           = [ord('K')]
-        self.PAN_RIGHT        = [ord('L')]
         self.OPEN_GUI         = [ord('X')]
         self.REFRESH          = [18, curses.KEY_RESIZE]            # CTRL-R
         self.QUIT             = [3, ord('q')]
@@ -1645,6 +1671,30 @@ def view(file_change,doc):
             count_string = ""
             stack = [0]
 
+        elif key == curses.KEY_SLEFT:
+            doc.pan_x -= scr.width * 0.2
+            doc.mark_all_pages_stale()
+            count_string = ""
+            stack = [0]
+
+        elif key == curses.KEY_SRIGHT:
+            doc.pan_x += scr.width * 0.2
+            doc.mark_all_pages_stale()
+            count_string = ""
+            stack = [0]
+
+        elif key == curses.KEY_SR:
+            doc.pan_y -= scr.height * 0.2
+            doc.mark_all_pages_stale()
+            count_string = ""
+            stack = [0]
+
+        elif key == curses.KEY_SF:
+            doc.pan_y += scr.height * 0.2
+            doc.mark_all_pages_stale()
+            count_string = ""
+            stack = [0]
+
         elif key in keys.NEXT_PAGE:
             doc.next_page(count)
             count_string = ""
@@ -1767,30 +1817,6 @@ def view(file_change,doc):
             doc.zoom_level = 1.0
             doc.pan_x = 0.0
             doc.pan_y = 0.0
-            doc.mark_all_pages_stale()
-            count_string = ""
-            stack = [0]
-
-        elif key in keys.PAN_LEFT:
-            doc.pan_x -= scr.width * 0.2
-            doc.mark_all_pages_stale()
-            count_string = ""
-            stack = [0]
-
-        elif key in keys.PAN_RIGHT:
-            doc.pan_x += scr.width * 0.2
-            doc.mark_all_pages_stale()
-            count_string = ""
-            stack = [0]
-
-        elif key in keys.PAN_UP:
-            doc.pan_y -= scr.height * 0.2
-            doc.mark_all_pages_stale()
-            count_string = ""
-            stack = [0]
-
-        elif key in keys.PAN_DOWN:
-            doc.pan_y += scr.height * 0.2
             doc.mark_all_pages_stale()
             count_string = ""
             stack = [0]
